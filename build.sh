@@ -50,4 +50,9 @@ echo "Creating and pushing git tag ${TAG}..."
 git tag -a "${TAG}" -m "Release ${VERSION}"
 git push origin "${TAG}"
 
-echo "Done: published ${IMAGE}:${VERSION} and tagged ${TAG}."
+# Publish a GitHub release using this version's changelog section as the notes
+echo "Creating GitHub release ${TAG}..."
+NOTES="$(awk -v v="### ${VERSION} " '$0 ~ "^"v {f=1; next} /^### /{f=0} f' README.md)"
+gh release create "${TAG}" --title "${TAG}" --notes "${NOTES}"
+
+echo "Done: published ${IMAGE}:${VERSION}, tagged ${TAG} and created the GitHub release."

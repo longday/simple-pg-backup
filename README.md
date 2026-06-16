@@ -6,6 +6,21 @@ Docker image that backs up PostgreSQL to the local filesystem with scheduled, ro
 
 Inspired by [prodrigestivill/docker-postgres-backup-local](https://github.com/prodrigestivill/docker-postgres-backup-local). It focuses on a single Alpine image based on the PostgreSQL 18 client and a straightforward build-and-release flow.
 
+## Table of Contents
+
+* [Features](#features)
+* [Usage](#usage)
+  * [Environment Variables](#environment-variables)
+  * [Remote host over SSH](#remote-host-over-ssh)
+  * [How the backups folder works?](#how-the-backups-folder-works)
+  * [Manual Backups](#manual-backups)
+  * [Automatic Periodic Backups](#automatic-periodic-backups)
+* [Restore examples](#restore-examples)
+  * [Restore using the same container](#restore-using-the-same-container)
+  * [Restore using a new container](#restore-using-a-new-container)
+* [Build and release](#build-and-release)
+* [Changelog](#changelog)
+
 ## Features
 
 * **Single image, any server** — the image ships only the PostgreSQL 18 client, so one build dumps any reachable server from version 9.2 onwards.
@@ -206,6 +221,14 @@ The released version is stored in the `VERSION` file using [semver](https://semv
 The image name, platforms and base versions are constants defined at the top of `build.sh`. The script aborts if `VERSION` is not valid semver, if the working tree is dirty, if the git tag already exists, or if there is no `### <version>` entry in the Changelog below.
 
 ## Changelog
+
+### 1.0.1 - 2026-06-16
+
+* Added `SSH_COMPRESSION` (default `TRUE`) to compress the SSH tunnel, and `ServerAliveCountMax` for deterministic tunnel timeouts.
+* Improved backup log output: progress counters (`[n/total]`), database names, and per-database dump size.
+* Boolean environment flags (`TRUE`/`FALSE`) are now case-insensitive.
+* Replaced the `**None**` sentinel with empty-string defaults and `-z`/`-n` checks.
+* Removed the `postgres` user run guidance from the documentation.
 
 ### 1.0.0 - 2026-06-11
 
