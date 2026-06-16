@@ -25,7 +25,7 @@ Please also read [How the backups folder works?](#how-the-backups-folder-works).
 Docker:
 
 ```sh
-docker run -u postgres:postgres -e POSTGRES_HOST=postgres -e POSTGRES_DB=dbname -e POSTGRES_USER=user -e POSTGRES_PASSWORD=password  longday/simple-pg-backup
+docker run -e POSTGRES_HOST=postgres -e POSTGRES_DB=dbname -e POSTGRES_USER=user -e POSTGRES_PASSWORD=password  longday/simple-pg-backup
 ```
 
 Docker Compose:
@@ -43,7 +43,6 @@ services:
     pgbackups:
         image: longday/simple-pg-backup
         restart: always
-        user: postgres:postgres # Optional: see below
         volumes:
             - /var/opt/pgbackups:/backups
         links:
@@ -63,13 +62,6 @@ services:
             - BACKUP_KEEP_WEEKS=4
             - BACKUP_KEEP_MONTHS=6
             - HEALTHCHECK_PORT=8080
-```
-
-For security reasons it is recommended to run it as user `postgres:postgres`.
-
-In case of running as `postgres` user, the system administrator must initialize the permission of the destination folder as follows:
-```sh
-mkdir -p /var/opt/pgbackups && chown -R 70:70 /var/opt/pgbackups
 ```
 
 ### Environment Variables
