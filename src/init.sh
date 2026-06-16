@@ -2,13 +2,13 @@
 set -Eeo pipefail
 
 # Prevalidate configuration (don't source)
-if [ "${VALIDATE_ON_START}" = "TRUE" ]; then
+if [ "${VALIDATE_ON_START^^}" = "TRUE" ]; then
   /env.sh
 fi
 
 EXTRA_ARGS=""
 # Initial background backup
-if [ "${BACKUP_ON_START}" = "TRUE" ]; then
+if [ "${BACKUP_ON_START^^}" = "TRUE" ]; then
   EXTRA_ARGS="-i"
 fi
 
