@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Pre-validate the environment
-if [ "${POSTGRES_DB}" = "**None**" -a "${POSTGRES_DB_FILE}" = "**None**" ]; then
+if [ -z "${POSTGRES_DB}" ] && [ -z "${POSTGRES_DB_FILE}" ]; then
   echo "You need to set the POSTGRES_DB or POSTGRES_DB_FILE environment variable."
   exit 1
 fi
 
-if [ "${POSTGRES_HOST}" = "**None**" ]; then
+if [ -z "${POSTGRES_HOST}" ]; then
   if [ -n "${POSTGRES_PORT_5432_TCP_ADDR}" ]; then
     POSTGRES_HOST=${POSTGRES_PORT_5432_TCP_ADDR}
     POSTGRES_PORT=${POSTGRES_PORT_5432_TCP_PORT}
@@ -15,30 +15,30 @@ if [ "${POSTGRES_HOST}" = "**None**" ]; then
   fi
 fi
 
-if [ "${POSTGRES_USER}" = "**None**" -a "${POSTGRES_USER_FILE}" = "**None**" ]; then
+if [ -z "${POSTGRES_USER}" ] && [ -z "${POSTGRES_USER_FILE}" ]; then
   echo "You need to set the POSTGRES_USER or POSTGRES_USER_FILE environment variable."
   exit 1
 fi
 
-if [ "${POSTGRES_PASSWORD}" = "**None**" -a "${POSTGRES_PASSWORD_FILE}" = "**None**" -a "${POSTGRES_PASSFILE_STORE}" = "**None**" ]; then
+if [ -z "${POSTGRES_PASSWORD}" ] && [ -z "${POSTGRES_PASSWORD_FILE}" ] && [ -z "${POSTGRES_PASSFILE_STORE}" ]; then
   echo "You need to set the POSTGRES_PASSWORD or POSTGRES_PASSWORD_FILE or POSTGRES_PASSFILE_STORE environment variable or link to a container named POSTGRES."
   exit 1
 fi
 
 # Optional SSH tunnel validation
-if [ "${SSH_HOST}" != "**None**" ]; then
-  if [ "${SSH_USER}" = "**None**" ]; then
+if [ -n "${SSH_HOST}" ]; then
+  if [ -z "${SSH_USER}" ]; then
     echo "SSH_HOST is set but SSH_USER is missing."
     exit 1
   fi
-  if [ '!' -s "${SSH_KEY_FILE}" ] && [ "${SSH_PASSWORD}" = "**None**" ] && [ "${SSH_PASSWORD_FILE}" = "**None**" ]; then
+  if [ '!' -s "${SSH_KEY_FILE}" ] && [ -z "${SSH_PASSWORD}" ] && [ -z "${SSH_PASSWORD_FILE}" ]; then
     echo "SSH_HOST is set but no SSH authentication provided (mount a key at SSH_KEY_FILE or set SSH_PASSWORD or SSH_PASSWORD_FILE)."
     exit 1
   fi
 fi
 
 #Process vars
-if [ "${POSTGRES_DB_FILE}" = "**None**" ]; then
+if [ -z "${POSTGRES_DB_FILE}" ]; then
   POSTGRES_DBS=$(echo "${POSTGRES_DB}" | tr , " ")
 elif [ -r "${POSTGRES_DB_FILE}" ]; then
   POSTGRES_DBS=$(cat "${POSTGRES_DB_FILE}")
@@ -46,7 +46,7 @@ else
   echo "Missing POSTGRES_DB_FILE file."
   exit 1
 fi
-if [ "${POSTGRES_USER_FILE}" = "**None**" ]; then
+if [ -z "${POSTGRES_USER_FILE}" ]; then
   export PGUSER="${POSTGRES_USER}"
 elif [ -r "${POSTGRES_USER_FILE}" ]; then
   export PGUSER=$(cat "${POSTGRES_USER_FILE}")
@@ -54,7 +54,7 @@ else
   echo "Missing POSTGRES_USER_FILE file."
   exit 1
 fi
-if [ "${POSTGRES_PASSWORD_FILE}" = "**None**" -a "${POSTGRES_PASSFILE_STORE}" = "**None**" ]; then
+if [ -z "${POSTGRES_PASSWORD_FILE}" ] && [ -z "${POSTGRES_PASSFILE_STORE}" ]; then
   export PGPASSWORD="${POSTGRES_PASSWORD}"
 elif [ -r "${POSTGRES_PASSWORD_FILE}" ]; then
   export PGPASSWORD=$(cat "${POSTGRES_PASSWORD_FILE}")
@@ -64,7 +64,7 @@ else
   echo "Missing POSTGRES_PASSWORD_FILE or POSTGRES_PASSFILE_STORE file."
   exit 1
 fi
-if [ "${SSH_HOST}" != "**None**" ]; then
+if [ -n "${SSH_HOST}" ]; then
   # pg_dump connects to the local end of the SSH tunnel (opened in backup.sh).
   REMOTE_PG_HOST="${POSTGRES_HOST}"
   REMOTE_PG_PORT="${POSTGRES_PORT}"
@@ -74,7 +74,7 @@ if [ "${SSH_HOST}" != "**None**" ]; then
   # Resolve SSH authentication (private key takes precedence over password)
   if [ -s "${SSH_KEY_FILE}" ]; then
     SSH_AUTH="key"
-  elif [ "${SSH_PASSWORD_FILE}" != "**None**" ]; then
+  elif [ -n "${SSH_PASSWORD_FILE}" ]; then
     if [ -r "${SSH_PASSWORD_FILE}" ]; then
       SSH_PASSWORD_RESOLVED=$(cat "${SSH_PASSWORD_FILE}")
     else

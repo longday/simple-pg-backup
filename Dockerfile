@@ -10,23 +10,23 @@ RUN set -x \
 	&& curl --fail --retry 4 --retry-all-errors -L https://github.com/prodrigestivill/go-cron/releases/download/$GOCRONVER/go-cron-$TARGETOS-$TARGETARCH-static.gz | zcat > /usr/local/bin/go-cron \
 	&& chmod a+x /usr/local/bin/go-cron
 
-ENV POSTGRES_DB="**None**" \
-    POSTGRES_DB_FILE="**None**" \
-    POSTGRES_HOST="**None**" \
+ENV POSTGRES_DB="" \
+    POSTGRES_DB_FILE="" \
+    POSTGRES_HOST="" \
     POSTGRES_PORT=5432 \
-    POSTGRES_USER="**None**" \
-    POSTGRES_USER_FILE="**None**" \
-    POSTGRES_PASSWORD="**None**" \
-    POSTGRES_PASSWORD_FILE="**None**" \
-    POSTGRES_PASSFILE_STORE="**None**" \
+    POSTGRES_USER="" \
+    POSTGRES_USER_FILE="" \
+    POSTGRES_PASSWORD="" \
+    POSTGRES_PASSWORD_FILE="" \
+    POSTGRES_PASSFILE_STORE="" \
     POSTGRES_EXTRA_OPTS="-Z1 --large-objects" \
-    SSH_HOST="**None**" \
+    SSH_HOST="" \
     SSH_PORT=22 \
-    SSH_USER="**None**" \
+    SSH_USER="" \
     SSH_KEY_FILE="/run/secrets/ssh_key" \
-    SSH_PASSWORD="**None**" \
-    SSH_PASSWORD_FILE="**None**" \
-    SSH_KNOWN_HOSTS_FILE="**None**" \
+    SSH_PASSWORD="" \
+    SSH_PASSWORD_FILE="" \
+    SSH_KNOWN_HOSTS_FILE="" \
     SSH_STRICT_HOST_KEY_CHECKING="FALSE" \
     SSH_COMPRESSION="TRUE" \
     SCHEDULE="@daily" \

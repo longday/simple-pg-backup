@@ -13,7 +13,7 @@ cleanup(){
 }
 trap cleanup EXIT
 
-if [ "${SSH_HOST}" != "**None**" ]; then
+if [ -n "${SSH_HOST}" ]; then
   echo "Opening SSH tunnel ${SSH_USER}@${SSH_HOST}:${SSH_PORT} -> ${REMOTE_PG_HOST}:${REMOTE_PG_PORT}..."
   SSH_OPTS="-o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -p ${SSH_PORT}"
   if [ "${SSH_COMPRESSION^^}" = "TRUE" ]; then
@@ -21,7 +21,7 @@ if [ "${SSH_HOST}" != "**None**" ]; then
   fi
   if [ "${SSH_STRICT_HOST_KEY_CHECKING^^}" = "FALSE" ]; then
     SSH_OPTS="${SSH_OPTS} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-  elif [ "${SSH_KNOWN_HOSTS_FILE}" != "**None**" ]; then
+  elif [ -n "${SSH_KNOWN_HOSTS_FILE}" ]; then
     SSH_OPTS="${SSH_OPTS} -o UserKnownHostsFile=${SSH_KNOWN_HOSTS_FILE}"
   fi
   SSH_FWD="127.0.0.1:${SSH_LOCAL_PORT}:${REMOTE_PG_HOST}:${REMOTE_PG_PORT}"
