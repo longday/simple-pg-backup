@@ -25,6 +25,18 @@ if [ "${POSTGRES_PASSWORD}" = "**None**" -a "${POSTGRES_PASSWORD_FILE}" = "**Non
   exit 1
 fi
 
+# Optional SSH tunnel validation
+if [ "${SSH_HOST}" != "**None**" ]; then
+  if [ "${SSH_USER}" = "**None**" ]; then
+    echo "SSH_HOST is set but SSH_USER is missing."
+    exit 1
+  fi
+  if [ '!' -s "${SSH_KEY_FILE}" ] && [ "${SSH_PASSWORD}" = "**None**" ] && [ "${SSH_PASSWORD_FILE}" = "**None**" ]; then
+    echo "SSH_HOST is set but no SSH authentication provided (mount a key at SSH_KEY_FILE or set SSH_PASSWORD or SSH_PASSWORD_FILE)."
+    exit 1
+  fi
+fi
+
 #Process vars
 if [ "${POSTGRES_DB_FILE}" = "**None**" ]; then
   POSTGRES_DBS=$(echo "${POSTGRES_DB}" | tr , " ")
@@ -52,12 +64,37 @@ else
   echo "Missing POSTGRES_PASSWORD_FILE or POSTGRES_PASSFILE_STORE file."
   exit 1
 fi
-export PGHOST="${POSTGRES_HOST}"
-export PGPORT="${POSTGRES_PORT}"
+if [ "${SSH_HOST}" != "**None**" ]; then
+  # pg_dump connects to the local end of the SSH tunnel (opened in backup.sh).
+  REMOTE_PG_HOST="${POSTGRES_HOST}"
+  REMOTE_PG_PORT="${POSTGRES_PORT}"
+  SSH_LOCAL_PORT=63333
+  export PGHOST="127.0.0.1"
+  export PGPORT="${SSH_LOCAL_PORT}"
+  # Resolve SSH authentication (private key takes precedence over password)
+  if [ -s "${SSH_KEY_FILE}" ]; then
+    SSH_AUTH="key"
+  elif [ "${SSH_PASSWORD_FILE}" != "**None**" ]; then
+    if [ -r "${SSH_PASSWORD_FILE}" ]; then
+      SSH_PASSWORD_RESOLVED=$(cat "${SSH_PASSWORD_FILE}")
+    else
+      echo "Missing SSH_PASSWORD_FILE file."
+      exit 1
+    fi
+    SSH_AUTH="password"
+  else
+    SSH_PASSWORD_RESOLVED="${SSH_PASSWORD}"
+    SSH_AUTH="password"
+  fi
+else
+  export PGHOST="${POSTGRES_HOST}"
+  export PGPORT="${POSTGRES_PORT}"
+fi
+
 KEEP_MINS=${BACKUP_KEEP_MINS}
 KEEP_DAYS=${BACKUP_KEEP_DAYS}
-KEEP_WEEKS=`expr $(((${BACKUP_KEEP_WEEKS} * 7) + 1))`
-KEEP_MONTHS=`expr $(((${BACKUP_KEEP_MONTHS} * 31) + 1))`
+KEEP_WEEKS=$(( BACKUP_KEEP_WEEKS * 7 + 1 ))
+KEEP_MONTHS=$(( BACKUP_KEEP_MONTHS * 31 + 1 ))
 
 # Validate backup dir
 if [ '!' -d "${BACKUP_DIR}" -o '!' -w "${BACKUP_DIR}" -o '!' -x "${BACKUP_DIR}" ]; then

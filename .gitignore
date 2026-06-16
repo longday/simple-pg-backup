@@ -1,1 +1,13 @@
-dockerhub.md
+.copilot
+.claude
+.idea
+.vscode
+*.log
+*.tmp
+.DS_Store
+node_modules
+dist
+temp
+build
+
+
