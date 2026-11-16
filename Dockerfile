@@ -12,6 +12,7 @@ RUN set -x \
 
 ENV POSTGRES_DB="" \
     POSTGRES_DB_FILE="" \
+    POSTGRES_DB_EXCLUDE="" \
     POSTGRES_HOST="" \
     POSTGRES_PORT=5432 \
     POSTGRES_USER="" \

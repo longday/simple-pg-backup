@@ -59,6 +59,23 @@ case " ${POSTGRES_DBS} " in
     ;;
 esac
 
+# Drop the databases listed in POSTGRES_DB_EXCLUDE (comma or space separated).
+if [ -n "${POSTGRES_DB_EXCLUDE}" ]; then
+  EXCLUDE=" $(echo "${POSTGRES_DB_EXCLUDE}" | tr , " ") "
+  KEPT=""
+  for db in ${POSTGRES_DBS}; do
+    case "${EXCLUDE}" in
+      *" ${db} "*) ;;
+      *) KEPT="${KEPT} ${db}" ;;
+    esac
+  done
+  POSTGRES_DBS="${KEPT# }"
+  if [ -z "${POSTGRES_DBS}" ]; then
+    echo "No databases left to back up after applying POSTGRES_DB_EXCLUDE."
+    exit 1
+  fi
+fi
+
 #Initialize dirs
 mkdir -p "${BACKUP_DIR}/last/" "${BACKUP_DIR}/daily/" "${BACKUP_DIR}/weekly/" "${BACKUP_DIR}/monthly/"
 

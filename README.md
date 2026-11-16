@@ -26,7 +26,7 @@ Inspired by [prodrigestivill/docker-postgres-backup-local](https://github.com/pr
 * **Single image, any server** — the image ships only the PostgreSQL 18 client, so one build dumps any reachable server from version 9.2 onwards.
 * **Scheduled backups** — cron-style `SCHEDULE` plus an optional backup on container start.
 * **Rotating retention** — automatic `last` / `daily` / `weekly` / `monthly` folders with independent keep settings, deduplicated via hard links.
-* **Multiple databases** — list them in `POSTGRES_DB` (comma/space separated), or include `*` in the list to back up every non-template database.
+* **Multiple databases** — list them in `POSTGRES_DB` (comma/space separated), or include `*` in the list to back up every non-template database; `POSTGRES_DB_EXCLUDE` skips databases.
 * **Remote host over SSH** — optional SSH tunnel (`SSH_*`) to reach a Postgres server only available over SSH, with key or password auth.
 * **Docker secrets** — `*_FILE` variants for user, password and database list.
 * **Healthcheck** — HTTP endpoint exposing the schedule status.
@@ -96,6 +96,7 @@ Most variables are the same as in the [official postgres image](https://hub.dock
 | HEALTHCHECK_PORT | Port listening for cron-schedule health check. Defaults to `8080`. |
 | POSTGRES_DB | Comma or space separated list of postgres databases to backup. Include `*` in the list to back up every non-template database (queried from `pg_database`); the listing query connects through the first database listed before `*`, or `postgres` if none is given (e.g. `*` or `maindb,*`). Required. |
 | POSTGRES_DB_FILE | Alternative to POSTGRES_DB, but with one database per line, for usage with docker secrets (remember to remove EOF newlines). |
+| POSTGRES_DB_EXCLUDE | Comma or space separated list of databases to skip, applied after `*` is expanded (e.g. `POSTGRES_DB=*` with `POSTGRES_DB_EXCLUDE=logs`). Rotation only removes old files of databases still backed up, so delete an excluded database's existing files manually. Defaults to empty. |
 | POSTGRES_EXTRA_OPTS | Additional [options](https://www.postgresql.org/docs/current/app-pgdump.html#PG-DUMP-OPTIONS) for `pg_dump`. Defaults to `-Z1 --large-objects`. |
 | POSTGRES_HOST | Postgres connection parameter; postgres host to connect to. Required. |
 | POSTGRES_PASSWORD | Postgres connection parameter; postgres password to connect with. Required. |
@@ -221,6 +222,10 @@ The released version is stored in the `VERSION` file using [semver](https://semv
 The image name, platforms and base versions are constants defined at the top of `build.sh`. The script aborts if `VERSION` is not valid semver, if the working tree is dirty, if the git tag already exists, or if there is no `### <version>` entry in the Changelog below.
 
 ## Changelog
+
+### 1.0.2 - 2026-11-17
+
+* Added `POSTGRES_DB_EXCLUDE` to skip databases, including those matched by `*`.
 
 ### 1.0.1 - 2026-06-16
 
