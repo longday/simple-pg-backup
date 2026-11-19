@@ -39,6 +39,8 @@ ENV POSTGRES_DB="" \
     BACKUP_KEEP_WEEKS=4 \
     BACKUP_KEEP_MONTHS=6 \
     BACKUP_KEEP_MINS=1440 \
+    METRICS_FILE="" \
+    METRICS_SERVICE="" \
     HEALTHCHECK_PORT=8080
 
 COPY src/backup.sh src/env.sh src/init.sh /

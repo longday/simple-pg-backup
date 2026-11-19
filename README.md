@@ -12,6 +12,7 @@ Inspired by [prodrigestivill/docker-postgres-backup-local](https://github.com/pr
 * [Usage](#usage)
   * [Environment Variables](#environment-variables)
   * [Remote host over SSH](#remote-host-over-ssh)
+  * [Metrics](#metrics)
   * [How the backups folder works?](#how-the-backups-folder-works)
   * [Manual Backups](#manual-backups)
   * [Automatic Periodic Backups](#automatic-periodic-backups)
@@ -30,6 +31,7 @@ Inspired by [prodrigestivill/docker-postgres-backup-local](https://github.com/pr
 * **Remote host over SSH** — optional SSH tunnel (`SSH_*`) to reach a Postgres server only available over SSH, with key or password auth.
 * **Docker secrets** — `*_FILE` variants for user, password and database list.
 * **Healthcheck** — HTTP endpoint exposing the schedule status.
+* **Metrics** — optional Prometheus textfile-collector metrics (`METRICS_FILE`): last run result, last success time, duration and size per database.
 
 The destination docker volume `/backups` must be a POSIX-compliant filesystem (hard links and symlinks are required), so VFAT, EXFAT, SMB/CIFS and similar cannot be used.
 
@@ -94,6 +96,8 @@ Most variables are the same as in the [official postgres image](https://hub.dock
 | BACKUP_KEEP_MINS | Number of minutes for `last` folder backups to keep before removal. Defaults to `1440`. |
 | VALIDATE_ON_START | If set to `FALSE` does not validate the configuration on start. Disabling this is not recommended. Defaults to `TRUE`. |
 | HEALTHCHECK_PORT | Port listening for cron-schedule health check. Defaults to `8080`. |
+| METRICS_FILE | Path of the Prometheus metrics file (textfile collector format). Empty disables metrics, which is the default. See [Metrics](#metrics). |
+| METRICS_SERVICE | Value of the `service` metrics label. Required when `METRICS_FILE` is set. |
 | POSTGRES_DB | Comma or space separated list of postgres databases to backup. Include `*` in the list to back up every non-template database (queried from `pg_database`); the listing query connects through the first database listed before `*`, or `postgres` if none is given (e.g. `*` or `maindb,*`). Required. |
 | POSTGRES_DB_FILE | Alternative to POSTGRES_DB, but with one database per line, for usage with docker secrets (remember to remove EOF newlines). |
 | POSTGRES_DB_EXCLUDE | Comma or space separated list of databases to skip, applied after `*` is expanded (e.g. `POSTGRES_DB=*` with `POSTGRES_DB_EXCLUDE=logs`). Rotation only removes old files of databases still backed up, so delete an excluded database's existing files manually. Defaults to empty. |
@@ -149,6 +153,63 @@ Authentication uses a private key (`SSH_KEY_FILE`) when provided, otherwise a pa
             - SSH_KEY_FILE=/run/secrets/ssh_key
             - SSH_KNOWN_HOSTS_FILE=/run/secrets/known_hosts
 ```
+
+### Metrics
+
+The image can publish the result of every run in the [node-exporter textfile collector](https://github.com/prometheus/node_exporter#textfile-collector) format, so a missed or broken backup can raise an alert. Metrics are off unless `METRICS_FILE` is set.
+
+| variable | description |
+|--|--|
+| `METRICS_FILE` | Path of the metrics file inside the container, e.g. `/metrics/pg_backup_pg-backup.prom`. It must end with `.prom` and its directory must exist and be writable (mount the directory node-exporter reads via `--collector.textfile.directory`). Empty disables metrics. |
+| `METRICS_SERVICE` | Value of the `service` label. Required when `METRICS_FILE` is set. Containers sharing one metrics directory need different `METRICS_FILE` names and `METRICS_SERVICE` values. |
+
+All metrics are gauges:
+
+| metric | labels | meaning |
+|--|--|--|
+| `pg_backup_last_run_timestamp_seconds` | `service` | Unix time the last run finished (successfully or not). |
+| `pg_backup_last_run_success` | `service` | `1` if the last run succeeded, `0` if it failed. |
+| `pg_backup_last_success_timestamp_seconds` | `service`, `db` | Unix time the `pg_dump` of the database last finished successfully. |
+| `pg_backup_duration_seconds` | `service`, `db` | `pg_dump` duration of the last successful backup of the database. |
+| `pg_backup_size_bytes` | `service`, `db` | Size of the last successful backup: file size, or `du -sb` of the directory for the directory format (`-Fd`). |
+
+Behaviour:
+
+* The file is rewritten after every database and once more when the run ends. While a run is in progress `last_run_*` keep the values of the previous run.
+* After a **successful** run the file contains series only for the databases dumped in that run, so deleted or excluded databases (`POSTGRES_DB_EXCLUDE`) disappear.
+* After a **failed** run (any error: `pg_dump` failure, unreachable PostgreSQL, invalid configuration) `pg_backup_last_run_success` is `0` and `pg_backup_last_run_timestamp_seconds` is the current time. Databases dumped before the failure get fresh series; for all other databases the series of the previous file are kept unchanged. The run stops at the first failing database, as before.
+* A run killed by a signal leaves the previous file untouched.
+* The file is replaced atomically: the data is written to a hidden `.<name>.tmp.XXXXXX` file in the same directory (not ending in `.prom`, so node-exporter ignores it), `chmod 0644` is applied and the file is renamed. The mode matters because node-exporter runs as `nobody` and cannot read the `0600` file that `mktemp` creates.
+* A failure to write metrics prints a warning to stderr and never changes the result of the backup.
+
+Example: start a throwaway PostgreSQL with databases `a` and `b`, back them up and read the result through node-exporter (run it from an empty directory):
+
+```sh
+mkdir -p backups metrics
+docker network create pgdemo
+docker run -d --name pgdemo-db --network pgdemo \
+  -e POSTGRES_USER=user -e POSTGRES_PASSWORD=password -e POSTGRES_DB=a postgres:18-alpine
+until docker exec pgdemo-db pg_isready -h 127.0.0.1 -U user -d a -q; do sleep 1; done
+docker exec pgdemo-db createdb -U user b
+
+docker run --rm --network pgdemo \
+  -v "$PWD/backups:/backups" -v "$PWD/metrics:/metrics" \
+  -e POSTGRES_HOST=pgdemo-db -e POSTGRES_DB=a,b -e POSTGRES_USER=user -e POSTGRES_PASSWORD=password \
+  -e METRICS_FILE=/metrics/pg_backup_pg-backup.prom -e METRICS_SERVICE=pg-backup \
+  longday/simple-pg-backup:1.1.0 /backup.sh
+
+grep -v '^#' metrics/pg_backup_pg-backup.prom
+
+docker run -d --name pgdemo-ne --user 65534 -p 9100:9100 -v "$PWD/metrics:/textfile:ro" \
+  quay.io/prometheus/node-exporter:v1.11.1 --collector.textfile.directory=/textfile
+sleep 2
+curl -s localhost:9100/metrics | grep -E '^(pg_backup_|node_textfile_scrape_error)'
+
+docker rm -f pgdemo-ne pgdemo-db
+docker network rm pgdemo
+```
+
+The backup command creates `metrics/pg_backup_pg-backup.prom` with the five metrics above (`pg_backup_last_run_success{service="pg-backup"} 1` and per-database series for `a` and `b`); the `curl` command shows the same series through node-exporter with `node_textfile_scrape_error 0`.
 
 ### How the backups folder works?
 
@@ -222,6 +283,11 @@ The released version is stored in the `VERSION` file using [semver](https://semv
 The image name, platforms and base versions are constants defined at the top of `build.sh`. The script aborts if `VERSION` is not valid semver, if the working tree is dirty, if the git tag already exists, or if there is no `### <version>` entry in the Changelog below.
 
 ## Changelog
+
+### 1.1.0 - 2026-11-20
+
+* Added Prometheus metrics for the [node-exporter textfile collector](https://github.com/prometheus/node_exporter#textfile-collector): set `METRICS_FILE` and `METRICS_SERVICE` to get last run result, last success time, duration and size per database. See [Metrics](#metrics). Disabled by default; without `METRICS_FILE` behaviour and output are the same as 1.0.2.
+* `METRICS_SERVICE` is required when `METRICS_FILE` is set.
 
 ### 1.0.2 - 2026-11-17
 

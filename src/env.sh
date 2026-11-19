@@ -37,6 +37,12 @@ if [ -n "${SSH_HOST}" ]; then
   fi
 fi
 
+# Optional metrics validation
+if [ -n "${METRICS_FILE}" ] && [ -z "${METRICS_SERVICE}" ]; then
+  echo "METRICS_FILE is set but METRICS_SERVICE is missing."
+  exit 1
+fi
+
 #Process vars
 if [ -z "${POSTGRES_DB_FILE}" ]; then
   POSTGRES_DBS=$(echo "${POSTGRES_DB}" | tr , " ")
