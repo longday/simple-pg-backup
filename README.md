@@ -276,71 +276,72 @@ Some examples to restore/apply the backups. A dump is a plain-SQL file compresse
 Before restoring:
 
 * Restore into an **empty** database. Dumps are made without `--clean`, so objects that already exist cause errors.
+* Keep the variables quoted, as in the commands below: an unquoted path with a space is split into several arguments, and `zstd` or the mount then fails on a wrong file while `psql` may still end with success on an empty stream.
 * The dump starts with `\restrict` and ends with `\unrestrict`, so the `psql` that applies it must support them: PostgreSQL 18.x and the patch releases 17.6, 16.10, 15.14, 13.22 and newer. An older client fails. This image ships the PostgreSQL 18 client; with the official `postgres` image pick a `$VERSION` that meets this.
 * The commands use `-v ON_ERROR_STOP=1`, so `psql` stops at the first error and exits non-zero. `-q` alone does not hide the result rows of `lo_create`, `lowrite` and `set_config`, so the commands add `-o /dev/null`; errors still go to stderr.
-* The exit code of a pipe is the one of its last command (`psql`), so a failing `zstd`/`zcat` is not reported. `set -o pipefail` in your script covers only the pipes that run in your shell (the `zstd -dc … | docker exec …` commands below). The pipes inside `/bin/sh -c "…"` and `sh -c "…"` run in the container's shell, where the setting of your script has no effect, and `/bin/sh` of some images has no `pipefail`. A truncated or corrupted file may not make `psql` fail either, so test the file first (see below) and compare the restored row counts with the source.
+* The exit code of a pipe is the one of its last command (`psql`), so a failing `zstd`/`zcat` is not reported. The pipes inside the containers run in `bash -o pipefail -c '…'`, so a failing decompressor makes the command fail. The two pipes that run in your shell (`zstd -dc … | docker exec …` below) need `set -o pipefail` in your script. A truncated or corrupted file may not make `psql` fail, so test the file first (see below) and compare the restored row counts with the source.
 
 Test a file and check that the dump is complete (`PostgreSQL database dump complete` is among the last 5 lines, the check prints `1`):
 
 ```sh
-zstd -t $BACKUPFILE && zstd -dc $BACKUPFILE | tail -n 5 | grep -c 'PostgreSQL database dump complete'
-gzip -t $BACKUPFILE && gzip -dc $BACKUPFILE | tail -n 5 | grep -c 'PostgreSQL database dump complete'
+zstd -t "$BACKUPFILE" && zstd -dc "$BACKUPFILE" | tail -n 5 | grep -c 'PostgreSQL database dump complete'
+gzip -t "$BACKUPFILE" && gzip -dc "$BACKUPFILE" | tail -n 5 | grep -c 'PostgreSQL database dump complete'
 ```
 
 The first line is for `.sql.zst`, the second for `.sql.gz`.
 
 ### Restore using the same container
 
-To restore using the same backup container, replace `$BACKUPFILE` (path inside the container, e.g. `/backups/last/dbname-20260101-030000.sql.zst`), `$CONTAINER`, `$HOSTNAME`, `$PORT`, `$USERNAME` and `$DBNAME` in one of the following commands.
+To restore using the same backup container, replace `$BACKUPFILE` (path inside the container, e.g. `/backups/last/dbname-20260101-030000.sql.zst`), `$CONTAINER`, `$HOSTNAME`, `$PORT`, `$USERNAME` and `$DBNAME` in one of the following commands. The values are passed to the shell inside the container as arguments (`$1`, `$2`, …) and every variable is quoted, so a path with spaces works.
 
 `.sql.gz`:
 
 ```sh
-docker exec --tty --interactive $CONTAINER /bin/sh -c "zcat $BACKUPFILE | psql --host=$HOSTNAME --port=$PORT --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null -W"
+docker exec --tty --interactive "$CONTAINER" bash -o pipefail -c 'zcat "$1" | psql --host="$2" --port="$3" --username="$4" --dbname="$5" -v ON_ERROR_STOP=1 -q -o /dev/null -W' bash "$BACKUPFILE" "$HOSTNAME" "$PORT" "$USERNAME" "$DBNAME"
 ```
 
 `.sql.zst`:
 
 ```sh
-docker exec --tty --interactive $CONTAINER /bin/sh -c "zstd -dc $BACKUPFILE | psql --host=$HOSTNAME --port=$PORT --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null -W"
+docker exec --tty --interactive "$CONTAINER" bash -o pipefail -c 'zstd -dc "$1" | psql --host="$2" --port="$3" --username="$4" --dbname="$5" -v ON_ERROR_STOP=1 -q -o /dev/null -W' bash "$BACKUPFILE" "$HOSTNAME" "$PORT" "$USERNAME" "$DBNAME"
 ```
 
 ### Restore using a new container
 
-Replace `$BACKUPFILE` (absolute path on the host), `$VERSION`, `$HOSTNAME`, `$PORT`, `$USERNAME` and `$DBNAME` in one of the following commands. `$HOSTNAME` must be reachable from the new container; for a server on a docker network add `--network $NETWORK`.
+Replace `$BACKUPFILE` (absolute path on the host), `$VERSION`, `$HOSTNAME`, `$PORT`, `$USERNAME` and `$DBNAME` in one of the following commands. `$HOSTNAME` must be reachable from the new container; for a server on a docker network add `--network "$NETWORK"`.
 
 `.sql.gz`:
 
 ```sh
-docker run --rm --tty --interactive -v $BACKUPFILE:/tmp/backupfile.sql.gz postgres:$VERSION /bin/sh -c "zcat /tmp/backupfile.sql.gz | psql --host=$HOSTNAME --port=$PORT --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null -W"
+docker run --rm --tty --interactive -v "$BACKUPFILE":/tmp/backupfile.sql.gz postgres:$VERSION bash -o pipefail -c 'zcat /tmp/backupfile.sql.gz | psql --host="$1" --port="$2" --username="$3" --dbname="$4" -v ON_ERROR_STOP=1 -q -o /dev/null -W' bash "$HOSTNAME" "$PORT" "$USERNAME" "$DBNAME"
 ```
 
 `.sql.zst`:
 
 ```sh
-docker run --rm --tty --interactive -v $BACKUPFILE:/tmp/backupfile.sql.zst postgres:$VERSION /bin/sh -c "zstd -dc /tmp/backupfile.sql.zst | psql --host=$HOSTNAME --port=$PORT --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null -W"
+docker run --rm --tty --interactive -v "$BACKUPFILE":/tmp/backupfile.sql.zst postgres:$VERSION bash -o pipefail -c 'zstd -dc /tmp/backupfile.sql.zst | psql --host="$1" --port="$2" --username="$3" --dbname="$4" -v ON_ERROR_STOP=1 -q -o /dev/null -W' bash "$HOSTNAME" "$PORT" "$USERNAME" "$DBNAME"
 ```
 
 ### Restore a .sql.zst into a running PostgreSQL container
 
-Replace `$BACKUPDIR` (host directory with the dump), `$BACKUPNAME` (file name in it), `$PGCONTAINER` (container with PostgreSQL), `$USERNAME` and `$DBNAME`. The database must exist and be empty (`docker exec $PGCONTAINER psql --username=$USERNAME -c "create database $DBNAME"`).
+Replace `$BACKUPDIR` (host directory with the dump), `$BACKUPNAME` (file name in it), `$PGCONTAINER` (container with PostgreSQL), `$USERNAME` and `$DBNAME`. The database must exist and be empty (`docker exec "$PGCONTAINER" psql --username="$USERNAME" -c "create database $DBNAME"`).
 
 With `zstd` on the host:
 
 ```sh
-zstd -dc $BACKUPDIR/$BACKUPNAME | docker exec -i $PGCONTAINER psql --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null
+zstd -dc "$BACKUPDIR/$BACKUPNAME" | docker exec -i "$PGCONTAINER" psql --username="$USERNAME" --dbname="$DBNAME" -v ON_ERROR_STOP=1 -q -o /dev/null
 ```
 
 Without `zstd` on the host, decompress with the image:
 
 ```sh
-docker run --rm -v $BACKUPDIR:/b:ro longday/simple-pg-backup:1.2.0 zstd -dc /b/$BACKUPNAME | docker exec -i $PGCONTAINER psql --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null
+docker run --rm -v "$BACKUPDIR":/b:ro longday/simple-pg-backup:1.2.0 zstd -dc "/b/$BACKUPNAME" | docker exec -i "$PGCONTAINER" psql --username="$USERNAME" --dbname="$DBNAME" -v ON_ERROR_STOP=1 -q -o /dev/null
 ```
 
 With only the image, restoring into a PostgreSQL server reachable over a docker network (`$NETWORK`; export `PGPASSWORD` in your shell first, so the password does not appear in the command):
 
 ```sh
-docker run --rm --interactive --network $NETWORK -v $BACKUPDIR:/b:ro -e PGPASSWORD longday/simple-pg-backup:1.2.0 sh -c "zstd -dc /b/$BACKUPNAME | psql --host=$HOSTNAME --port=$PORT --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null"
+docker run --rm --interactive --network "$NETWORK" -v "$BACKUPDIR":/b:ro -e PGPASSWORD longday/simple-pg-backup:1.2.0 bash -o pipefail -c 'zstd -dc "/b/$1" | psql --host="$2" --port="$3" --username="$4" --dbname="$5" -v ON_ERROR_STOP=1 -q -o /dev/null' bash "$BACKUPNAME" "$HOSTNAME" "$PORT" "$USERNAME" "$DBNAME"
 ```
 
 ## Build and release
