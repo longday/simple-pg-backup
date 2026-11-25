@@ -145,12 +145,17 @@ metrics_on_error(){
 
 # Remove expired dumps of one database from a directory, for every suffix in ROTATE_SUFFIXES.
 #   $1: directory, $2/$3: find age test (e.g. -mtime +7), $4: database
+# BACKUP_SUFFIX (the first entry) matches "<db>-*<suffix>" as it always did. Legacy suffixes
+# match only the names this script generates (<db>-YYYYMMDD-HHMMSS, -YYYYMMDD, -GGGGVV, -YYYYMM),
+# so a dump of another database whose name starts with "<db>-" is never removed.
 rotate_dir(){
-  local s
-  local -a names=()
-  for s in "${ROTATE_SUFFIXES[@]}"; do
-    if [ "${#names[@]}" -gt 0 ]; then names+=(-o); fi
-    names+=(-name "$4-*${s}")
+  local s i d6 d8
+  local -a names=(-name "$4-*${ROTATE_SUFFIXES[0]}")
+  d6="[0-9][0-9][0-9][0-9][0-9][0-9]"
+  d8="[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"
+  for (( i = 1; i < ${#ROTATE_SUFFIXES[@]}; i++ )); do
+    s="${ROTATE_SUFFIXES[i]}"
+    names+=(-o -name "$4-${d8}-${d6}${s}" -o -name "$4-${d8}${s}" -o -name "$4-${d6}${s}")
   done
   find "$1" -maxdepth 1 "$2" "$3" \( "${names[@]}" \) -exec rm -rf '{}' ';'
 }
