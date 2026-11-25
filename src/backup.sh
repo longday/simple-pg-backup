@@ -143,21 +143,26 @@ metrics_on_error(){
   fi
 }
 
-# Remove expired dumps of one database from a directory, for every suffix in ROTATE_SUFFIXES.
-#   $1: directory, $2/$3: find age test (e.g. -mtime +7), $4: database
+# Remove expired dumps of one database from ${BACKUP_DIR}/<kind>, for every suffix in ROTATE_SUFFIXES.
+#   $1: directory kind (last, daily, weekly or monthly), $2/$3: find age test (e.g. -mtime +7), $4: database
 # BACKUP_SUFFIX (the first entry) matches "<db>-*<suffix>" as it always did. Legacy suffixes
-# match only the names this script generates (<db>-YYYYMMDD-HHMMSS, -YYYYMMDD, -GGGGVV, -YYYYMM),
-# so a dump of another database whose name starts with "<db>-" is never removed.
+# match only the name this script generates in that directory (last: <db>-YYYYMMDD-HHMMSS,
+# daily: -YYYYMMDD, weekly: -GGGGVV, monthly: -YYYYMM), so a dump of another database whose
+# name starts with "<db>-" is never removed.
 rotate_dir(){
-  local s i d6 d8
+  local s i stamp
   local -a names=(-name "$4-*${ROTATE_SUFFIXES[0]}")
-  d6="[0-9][0-9][0-9][0-9][0-9][0-9]"
-  d8="[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"
+  case "$1" in
+    last)    stamp="[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]" ;;
+    daily)   stamp="[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]" ;;
+    weekly|monthly) stamp="[0-9][0-9][0-9][0-9][0-9][0-9]" ;;
+    *) echo "rotate_dir: unknown directory kind '$1'."; return 1 ;;
+  esac
   for (( i = 1; i < ${#ROTATE_SUFFIXES[@]}; i++ )); do
     s="${ROTATE_SUFFIXES[i]}"
-    names+=(-o -name "$4-${d8}-${d6}${s}" -o -name "$4-${d8}${s}" -o -name "$4-${d6}${s}")
+    names+=(-o -name "$4-${stamp}${s}")
   done
-  find "$1" -maxdepth 1 "$2" "$3" \( "${names[@]}" \) -exec rm -rf '{}' ';'
+  find "${BACKUP_DIR}/$1" -maxdepth 1 "$2" "$3" \( "${names[@]}" \) -exec rm -rf '{}' ';'
 }
 
 # Open SSH tunnel if configured (pg_dump then connects to 127.0.0.1:SSH_LOCAL_PORT)
@@ -292,10 +297,10 @@ for DB in ${POSTGRES_DBS}; do
     ln -f "${FILE}" "${MFILE}"
   fi
   #Clean old files
-  rotate_dir "${BACKUP_DIR}/last" -mmin "+${KEEP_MINS}" "${DB}"
-  rotate_dir "${BACKUP_DIR}/daily" -mtime "+${KEEP_DAYS}" "${DB}"
-  rotate_dir "${BACKUP_DIR}/weekly" -mtime "+${KEEP_WEEKS}" "${DB}"
-  rotate_dir "${BACKUP_DIR}/monthly" -mtime "+${KEEP_MONTHS}" "${DB}"
+  rotate_dir last -mmin "+${KEEP_MINS}" "${DB}"
+  rotate_dir daily -mtime "+${KEEP_DAYS}" "${DB}"
+  rotate_dir weekly -mtime "+${KEEP_WEEKS}" "${DB}"
+  rotate_dir monthly -mtime "+${KEEP_MONTHS}" "${DB}"
   if metrics_enabled; then
     metrics_record "${DB}" "${FILE}" "${DB_START_US}" "${DB_END_US}"
   fi

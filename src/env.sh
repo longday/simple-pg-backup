@@ -105,9 +105,16 @@ KEEP_MONTHS=$(( BACKUP_KEEP_MONTHS * 31 + 1 ))
 # Suffixes of the dump files the rotation manages: BACKUP_SUFFIX plus every entry of
 # BACKUP_LEGACY_SUFFIXES (comma or space separated), e.g. the previous suffix after a
 # change of the compression method. Shared by everything that selects a database's files.
+# A legacy suffix is matched literally by find -name, so glob metacharacters and "/" are rejected.
 ROTATE_SUFFIXES=("${BACKUP_SUFFIX}")
 set -f
-for LEGACY_SUFFIX in $(echo "${BACKUP_LEGACY_SUFFIXES}" | tr , " "); do
+for LEGACY_SUFFIX in $(printf '%s\n' "${BACKUP_LEGACY_SUFFIXES}" | tr , " "); do
+  case "${LEGACY_SUFFIX}" in
+    *[]*?[\\/]*)
+      echo "BACKUP_LEGACY_SUFFIXES entry '${LEGACY_SUFFIX}' must not contain any of: * ? [ ] \\ /"
+      exit 1
+      ;;
+  esac
   if [ "${LEGACY_SUFFIX}" != "${BACKUP_SUFFIX}" ]; then
     ROTATE_SUFFIXES+=("${LEGACY_SUFFIX}")
   fi
