@@ -147,10 +147,10 @@ metrics_on_error(){
 #   $1: directory kind (last, daily, weekly or monthly), $2/$3: find age test (e.g. -mtime +7), $4: database
 # BACKUP_SUFFIX (the first entry) matches "<db>-*<suffix>" as it always did. Legacy suffixes
 # match only the name this script generates in that directory (last: <db>-YYYYMMDD-HHMMSS,
-# daily: -YYYYMMDD, weekly: -GGGGVV, monthly: -YYYYMM), so a dump of another database whose
-# name starts with "<db>-" is never removed.
+# daily: -YYYYMMDD, weekly: -GGGGVV, monthly: -YYYYMM), with the database name taken literally
+# (glob characters escaped), so a dump of another database is never removed.
 rotate_dir(){
-  local s i stamp
+  local s i stamp lit
   local -a names=(-name "$4-*${ROTATE_SUFFIXES[0]}")
   case "$1" in
     last)    stamp="[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]" ;;
@@ -158,9 +158,12 @@ rotate_dir(){
     weekly|monthly) stamp="[0-9][0-9][0-9][0-9][0-9][0-9]" ;;
     *) echo "rotate_dir: unknown directory kind '$1'."; return 1 ;;
   esac
+  if [ "${#ROTATE_SUFFIXES[@]}" -gt 1 ]; then
+    lit="$(printf '%s' "$4" | sed 's/[][\\*?]/\\&/g')"
+  fi
   for (( i = 1; i < ${#ROTATE_SUFFIXES[@]}; i++ )); do
     s="${ROTATE_SUFFIXES[i]}"
-    names+=(-o -name "$4-${stamp}${s}")
+    names+=(-o -name "${lit}-${stamp}${s}")
   done
   find "${BACKUP_DIR}/$1" -maxdepth 1 "$2" "$3" \( "${names[@]}" \) -exec rm -rf '{}' ';'
 }
