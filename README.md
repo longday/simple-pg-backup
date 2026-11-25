@@ -14,11 +14,13 @@ Inspired by [prodrigestivill/docker-postgres-backup-local](https://github.com/pr
   * [Remote host over SSH](#remote-host-over-ssh)
   * [Metrics](#metrics)
   * [How the backups folder works?](#how-the-backups-folder-works)
+  * [Changing the compression method](#changing-the-compression-method)
   * [Manual Backups](#manual-backups)
   * [Automatic Periodic Backups](#automatic-periodic-backups)
 * [Restore examples](#restore-examples)
   * [Restore using the same container](#restore-using-the-same-container)
   * [Restore using a new container](#restore-using-a-new-container)
+  * [Restore a .sql.zst into a running PostgreSQL container](#restore-a-sqlzst-into-a-running-postgresql-container)
 * [Build and release](#build-and-release)
 * [Changelog](#changelog)
 
@@ -32,6 +34,7 @@ Inspired by [prodrigestivill/docker-postgres-backup-local](https://github.com/pr
 * **Docker secrets** — `*_FILE` variants for user, password and database list.
 * **Healthcheck** — HTTP endpoint exposing the schedule status.
 * **Metrics** — optional Prometheus textfile-collector metrics (`METRICS_FILE`): last run result, last success time, duration and size per database.
+* **Compression** — gzip by default (`-Z1`, `.sql.gz`) or zstd (`-Z zstd:3`, `.sql.zst`); `BACKUP_LEGACY_SUFFIXES` rotates the dumps of the previous method while switching.
 
 The destination docker volume `/backups` must be a POSIX-compliant filesystem (hard links and symlinks are required), so VFAT, EXFAT, SMB/CIFS and similar cannot be used.
 
@@ -73,6 +76,8 @@ services:
             - POSTGRES_PASSWORD=password
          #  - POSTGRES_PASSWORD_FILE=/run/secrets/db_password <-- alternative for POSTGRES_PASSWORD (to use with docker secrets, remember to remove EOF newlines)
             - POSTGRES_EXTRA_OPTS=-Z1 --schema=public --large-objects
+         #  - for zstd dumps use POSTGRES_EXTRA_OPTS=-Z zstd:3 --schema=public --large-objects together with BACKUP_SUFFIX=.sql.zst
+            - BACKUP_SUFFIX=.sql.gz
             - SCHEDULE=@daily
             - BACKUP_ON_START=TRUE
             - BACKUP_KEEP_DAYS=7
@@ -88,7 +93,8 @@ Most variables are the same as in the [official postgres image](https://hub.dock
 | env variable | description |
 |--|--|
 | BACKUP_DIR | Directory to save the backup at. Defaults to `/backups`. |
-| BACKUP_SUFFIX | Filename suffix to save the backup. Defaults to `.sql.gz`. |
+| BACKUP_SUFFIX | Filename suffix of the dump files. It must match the compression method in `POSTGRES_EXTRA_OPTS`: `.sql.gz` for gzip (`-Z1`, the default) or `.sql.zst` for zstd (`-Z zstd:3`). `pg_dump` neither adds nor checks it, and neither does the image. Defaults to `.sql.gz`. |
+| BACKUP_LEGACY_SUFFIXES | Comma or space separated suffixes of earlier dumps (e.g. `.sql.gz` after switching to `.sql.zst`) that rotation removes by the retention rules together with `BACKUP_SUFFIX`. Only files named like the dumps the image generates for the database are matched, files with any other suffix are never removed. An entry must not contain `*`, `?`, `[`, `]`, `\` or `/`; otherwise the configuration is rejected. An entry equal to `BACKUP_SUFFIX` is ignored. Defaults to empty. See [Changing the compression method](#changing-the-compression-method). |
 | BACKUP_ON_START | If set to `TRUE` performs an backup on each container start or restart. Defaults to `FALSE`. |
 | BACKUP_KEEP_DAYS | Number of daily backups to keep before removal. Defaults to `7`. |
 | BACKUP_KEEP_WEEKS | Number of weekly backups to keep before removal. Defaults to `4`. |
@@ -101,7 +107,7 @@ Most variables are the same as in the [official postgres image](https://hub.dock
 | POSTGRES_DB | Comma or space separated list of postgres databases to backup. Include `*` in the list to back up every non-template database (queried from `pg_database`); the listing query connects through the first database listed before `*`, or `postgres` if none is given (e.g. `*` or `maindb,*`). Required. |
 | POSTGRES_DB_FILE | Alternative to POSTGRES_DB, but with one database per line, for usage with docker secrets (remember to remove EOF newlines). |
 | POSTGRES_DB_EXCLUDE | Comma or space separated list of databases to skip, applied after `*` is expanded (e.g. `POSTGRES_DB=*` with `POSTGRES_DB_EXCLUDE=logs`). Rotation only removes old files of databases still backed up, so delete an excluded database's existing files manually. Defaults to empty. |
-| POSTGRES_EXTRA_OPTS | Additional [options](https://www.postgresql.org/docs/current/app-pgdump.html#PG-DUMP-OPTIONS) for `pg_dump`. Defaults to `-Z1 --large-objects`. |
+| POSTGRES_EXTRA_OPTS | Additional [options](https://www.postgresql.org/docs/current/app-pgdump.html#PG-DUMP-OPTIONS) for `pg_dump`. Defaults to `-Z1 --large-objects` (gzip). For zstd use `-Z zstd:3` (e.g. `-Z zstd:3 --large-objects`) together with `BACKUP_SUFFIX=.sql.zst`. |
 | POSTGRES_HOST | Postgres connection parameter; postgres host to connect to. Required. |
 | POSTGRES_PASSWORD | Postgres connection parameter; postgres password to connect with. Required. |
 | POSTGRES_PASSWORD_FILE | Alternative to POSTGRES_PASSWORD, for usage with docker secrets (remember to remove EOF newlines). |
@@ -224,6 +230,8 @@ So the backup folder are structured as follows:
 * `BACKUP_DIR/weekly/DB-YYYYww.sql.gz`: always store (hard link) the **latest** backup of that week (the last day of the week will be Sunday as it uses ISO week numbers).
 * `BACKUP_DIR/monthly/DB-YYYYMM.sql.gz`: always store (hard link) the **latest** backup of that month (normally the ~31st).
 
+The suffix is `BACKUP_SUFFIX`: `.sql.gz` for gzip dumps (the default) or `.sql.zst` for zstd dumps (`-Z zstd:3`).
+
 For **cleaning** the script removes the files for each category only if the new backup has been successful.
 To do so it is using the following independent variables:
 
@@ -231,6 +239,17 @@ To do so it is using the following independent variables:
 * BACKUP_KEEP_DAYS: will remove files from the `daily` folder that are older than its value in days after a new successful backup.
 * BACKUP_KEEP_WEEKS: will remove files from the `weekly` folder that are older than its value in weeks after a new successful backup (remember that it starts counting from the end of each week not the beginning).
 * BACKUP_KEEP_MONTHS: will remove files from the `monthly` folder that are older than its value in months (of 31 days) after a new successful backup (remember that it starts counting from the end of each month not the beginning).
+
+### Changing the compression method
+
+`POSTGRES_EXTRA_OPTS` (`-Z`) sets how `pg_dump` compresses a dump and `BACKUP_SUFFIX` names the file. Rotation removes only files with `BACKUP_SUFFIX` or one of `BACKUP_LEGACY_SUFFIXES`, so after a change of suffix the old files match nothing and stay on disk forever unless the old suffix is listed in `BACKUP_LEGACY_SUFFIXES`. To change `.sql.gz` (gzip, the default) to `.sql.zst` (zstd) without losing restore points:
+
+1. Switch the method and the suffix together and leave `BACKUP_LEGACY_SUFFIXES` empty: `POSTGRES_EXTRA_OPTS=-Z zstd:3 --large-objects` and `BACKUP_SUFFIX=.sql.zst`. New dumps are `.sql.zst`; the old `.sql.gz` files are not rotated and not removed, so both sets are on disk and the new set grows until its retention is full. Make sure the filesystem has room for it, then run `/backup.sh` once.
+2. Check the new dump: test it and restore it into an empty database (see [Restore examples](#restore-examples)).
+3. Set `BACKUP_LEGACY_SUFFIXES=.sql.gz`. The next runs remove `.sql.gz` files by the same rules as `.sql.zst`: older than `BACKUP_KEEP_MINS` in `last`, `BACKUP_KEEP_DAYS` days in `daily`, `BACKUP_KEEP_WEEKS` × 7 + 1 days in `weekly`, `BACKUP_KEEP_MONTHS` × 31 + 1 days in `monthly`. The last `.sql.gz` is gone after the longest of them (187 days with the defaults). Do not do this before step 2: with a single copy (`BACKUP_KEEP_*` set to `0`) the first run removes the old dump as soon as it is past retention, and if the new one is unusable nothing is left.
+4. When no file with the old suffix is left (`find $BACKUP_DIR -name '*.sql.gz'` prints nothing), remove `BACKUP_LEGACY_SUFFIXES`.
+
+To go back to gzip, swap the values: `-Z1`, `BACKUP_SUFFIX=.sql.gz`, `BACKUP_LEGACY_SUFFIXES=.sql.zst`. Files with a suffix that is neither `BACKUP_SUFFIX` nor listed in `BACKUP_LEGACY_SUFFIXES` are never removed, and a legacy suffix matches only the names the image generates for the database being rotated (`DB-YYYYMMDD-HHmmss` in `last`, `DB-YYYYMMDD` in `daily`, `DB-YYYYww` in `weekly`, `DB-YYYYMM` in `monthly`), so a dump of another database such as `DB-staging-…` is not touched. The image does not check that `-Z` and `BACKUP_SUFFIX` agree. The size of a dump (`pg_backup_size_bytes`) drops after the switch because zstd compresses better than gzip level 1.
 
 ### Manual Backups
 
@@ -252,22 +271,76 @@ Folders `daily`, `weekly` and `monthly` are created and populated using hard lin
 
 ## Restore examples
 
-Some examples to restore/apply the backups.
+Some examples to restore/apply the backups. A dump is a plain-SQL file compressed as a whole with the method its suffix says: `.sql.gz` is read with `zcat`, `.sql.zst` with `zstd -dc`. Both tools are in this image and in the official `postgres` images (Debian and Alpine).
+
+Before restoring:
+
+* Restore into an **empty** database. Dumps are made without `--clean`, so objects that already exist cause errors.
+* The dump starts with `\restrict` and ends with `\unrestrict`, so the `psql` that applies it must support them: PostgreSQL 18.x and the patch releases 17.6, 16.10, 15.14, 13.22 and newer. An older client fails. This image ships the PostgreSQL 18 client; with the official `postgres` image pick a `$VERSION` that meets this.
+* The commands use `-v ON_ERROR_STOP=1`, so `psql` stops at the first error and exits non-zero. `-q` alone does not hide the result rows of `lo_create`, `lowrite` and `set_config`, so the commands add `-o /dev/null`; errors still go to stderr.
+* The exit code of a pipe is the one of its last command (`psql`), so a failing `zstd`/`zcat` is not reported. `set -o pipefail` in your script covers only the pipes that run in your shell (the `zstd -dc … | docker exec …` commands below). The pipes inside `/bin/sh -c "…"` and `sh -c "…"` run in the container's shell, where the setting of your script has no effect, and `/bin/sh` of some images has no `pipefail`. A truncated or corrupted file may not make `psql` fail either, so test the file first (see below) and compare the restored row counts with the source.
+
+Test a file and check that the dump is complete (`PostgreSQL database dump complete` is among the last 5 lines, the check prints `1`):
+
+```sh
+zstd -t $BACKUPFILE && zstd -dc $BACKUPFILE | tail -n 5 | grep -c 'PostgreSQL database dump complete'
+gzip -t $BACKUPFILE && gzip -dc $BACKUPFILE | tail -n 5 | grep -c 'PostgreSQL database dump complete'
+```
+
+The first line is for `.sql.zst`, the second for `.sql.gz`.
 
 ### Restore using the same container
 
-To restore using the same backup container, replace `$BACKUPFILE`, `$CONTAINER`, `$USERNAME` and `$DBNAME` from the following command:
+To restore using the same backup container, replace `$BACKUPFILE` (path inside the container, e.g. `/backups/last/dbname-20260101-030000.sql.zst`), `$CONTAINER`, `$HOSTNAME`, `$PORT`, `$USERNAME` and `$DBNAME` in one of the following commands.
+
+`.sql.gz`:
 
 ```sh
-docker exec --tty --interactive $CONTAINER /bin/sh -c "zcat $BACKUPFILE | psql --username=$USERNAME --dbname=$DBNAME -W"
+docker exec --tty --interactive $CONTAINER /bin/sh -c "zcat $BACKUPFILE | psql --host=$HOSTNAME --port=$PORT --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null -W"
+```
+
+`.sql.zst`:
+
+```sh
+docker exec --tty --interactive $CONTAINER /bin/sh -c "zstd -dc $BACKUPFILE | psql --host=$HOSTNAME --port=$PORT --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null -W"
 ```
 
 ### Restore using a new container
 
-Replace `$BACKUPFILE`, `$VERSION`, `$HOSTNAME`, `$PORT`, `$USERNAME` and `$DBNAME` from the following command:
+Replace `$BACKUPFILE` (absolute path on the host), `$VERSION`, `$HOSTNAME`, `$PORT`, `$USERNAME` and `$DBNAME` in one of the following commands. `$HOSTNAME` must be reachable from the new container; for a server on a docker network add `--network $NETWORK`.
+
+`.sql.gz`:
 
 ```sh
-docker run --rm --tty --interactive -v $BACKUPFILE:/tmp/backupfile.sql.gz postgres:$VERSION /bin/sh -c "zcat /tmp/backupfile.sql.gz | psql --host=$HOSTNAME --port=$PORT --username=$USERNAME --dbname=$DBNAME -W"
+docker run --rm --tty --interactive -v $BACKUPFILE:/tmp/backupfile.sql.gz postgres:$VERSION /bin/sh -c "zcat /tmp/backupfile.sql.gz | psql --host=$HOSTNAME --port=$PORT --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null -W"
+```
+
+`.sql.zst`:
+
+```sh
+docker run --rm --tty --interactive -v $BACKUPFILE:/tmp/backupfile.sql.zst postgres:$VERSION /bin/sh -c "zstd -dc /tmp/backupfile.sql.zst | psql --host=$HOSTNAME --port=$PORT --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null -W"
+```
+
+### Restore a .sql.zst into a running PostgreSQL container
+
+Replace `$BACKUPDIR` (host directory with the dump), `$BACKUPNAME` (file name in it), `$PGCONTAINER` (container with PostgreSQL), `$USERNAME` and `$DBNAME`. The database must exist and be empty (`docker exec $PGCONTAINER psql --username=$USERNAME -c "create database $DBNAME"`).
+
+With `zstd` on the host:
+
+```sh
+zstd -dc $BACKUPDIR/$BACKUPNAME | docker exec -i $PGCONTAINER psql --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null
+```
+
+Without `zstd` on the host, decompress with the image:
+
+```sh
+docker run --rm -v $BACKUPDIR:/b:ro longday/simple-pg-backup:1.2.0 zstd -dc /b/$BACKUPNAME | docker exec -i $PGCONTAINER psql --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null
+```
+
+With only the image, restoring into a PostgreSQL server reachable over a docker network (`$NETWORK`; export `PGPASSWORD` in your shell first, so the password does not appear in the command):
+
+```sh
+docker run --rm --interactive --network $NETWORK -v $BACKUPDIR:/b:ro -e PGPASSWORD longday/simple-pg-backup:1.2.0 sh -c "zstd -dc /b/$BACKUPNAME | psql --host=$HOSTNAME --port=$PORT --username=$USERNAME --dbname=$DBNAME -v ON_ERROR_STOP=1 -q -o /dev/null"
 ```
 
 ## Build and release
@@ -283,6 +356,12 @@ The released version is stored in the `VERSION` file using [semver](https://semv
 The image name, platforms and base versions are constants defined at the top of `build.sh`. The script aborts if `VERSION` is not valid semver, if the working tree is dirty, if the git tag already exists, or if there is no `### <version>` entry in the Changelog below.
 
 ## Changelog
+
+### 1.2.0 - 2026-11-25
+
+* Added `BACKUP_LEGACY_SUFFIXES`: comma or space separated suffixes of earlier dumps that rotation removes by the retention rules together with `BACKUP_SUFFIX`. It lets a deployment change the compression method (e.g. `.sql.gz` to `.sql.zst`) without leaving unrotated dumps behind. See [Changing the compression method](#changing-the-compression-method). Empty by default; without it rotation, files and metrics are the same as 1.1.0.
+* Defaults are unchanged (`POSTGRES_EXTRA_OPTS=-Z1 --large-objects`, `BACKUP_SUFFIX=.sql.gz`). zstd dumps (`-Z zstd:3` with `BACKUP_SUFFIX=.sql.zst`) are documented and verified with the bundled `pg_dump`.
+* Restore examples cover `.sql.gz` and `.sql.zst`, the `psql` version required by `\restrict`/`\unrestrict`, and a restore with `zstd` from the image.
 
 ### 1.1.0 - 2026-11-20
 
