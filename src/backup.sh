@@ -143,6 +143,18 @@ metrics_on_error(){
   fi
 }
 
+# Remove expired dumps of one database from a directory, for every suffix in ROTATE_SUFFIXES.
+#   $1: directory, $2/$3: find age test (e.g. -mtime +7), $4: database
+rotate_dir(){
+  local s
+  local -a names=()
+  for s in "${ROTATE_SUFFIXES[@]}"; do
+    if [ "${#names[@]}" -gt 0 ]; then names+=(-o); fi
+    names+=(-name "$4-*${s}")
+  done
+  find "$1" -maxdepth 1 "$2" "$3" \( "${names[@]}" \) -exec rm -rf '{}' ';'
+}
+
 # Open SSH tunnel if configured (pg_dump then connects to 127.0.0.1:SSH_LOCAL_PORT)
 SSH_TUNNEL_PID=""
 cleanup(){
@@ -275,10 +287,10 @@ for DB in ${POSTGRES_DBS}; do
     ln -f "${FILE}" "${MFILE}"
   fi
   #Clean old files
-  find "${BACKUP_DIR}/last" -maxdepth 1 -mmin "+${KEEP_MINS}" -name "${DB}-*${BACKUP_SUFFIX}" -exec rm -rf '{}' ';'
-  find "${BACKUP_DIR}/daily" -maxdepth 1 -mtime "+${KEEP_DAYS}" -name "${DB}-*${BACKUP_SUFFIX}" -exec rm -rf '{}' ';'
-  find "${BACKUP_DIR}/weekly" -maxdepth 1 -mtime "+${KEEP_WEEKS}" -name "${DB}-*${BACKUP_SUFFIX}" -exec rm -rf '{}' ';'
-  find "${BACKUP_DIR}/monthly" -maxdepth 1 -mtime "+${KEEP_MONTHS}" -name "${DB}-*${BACKUP_SUFFIX}" -exec rm -rf '{}' ';'
+  rotate_dir "${BACKUP_DIR}/last" -mmin "+${KEEP_MINS}" "${DB}"
+  rotate_dir "${BACKUP_DIR}/daily" -mtime "+${KEEP_DAYS}" "${DB}"
+  rotate_dir "${BACKUP_DIR}/weekly" -mtime "+${KEEP_WEEKS}" "${DB}"
+  rotate_dir "${BACKUP_DIR}/monthly" -mtime "+${KEEP_MONTHS}" "${DB}"
   if metrics_enabled; then
     metrics_record "${DB}" "${FILE}" "${DB_START_US}" "${DB_END_US}"
   fi

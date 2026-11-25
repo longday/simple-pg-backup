@@ -102,6 +102,18 @@ KEEP_DAYS=${BACKUP_KEEP_DAYS}
 KEEP_WEEKS=$(( BACKUP_KEEP_WEEKS * 7 + 1 ))
 KEEP_MONTHS=$(( BACKUP_KEEP_MONTHS * 31 + 1 ))
 
+# Suffixes of the dump files the rotation manages: BACKUP_SUFFIX plus every entry of
+# BACKUP_LEGACY_SUFFIXES (comma or space separated), e.g. the previous suffix after a
+# change of the compression method. Shared by everything that selects a database's files.
+ROTATE_SUFFIXES=("${BACKUP_SUFFIX}")
+set -f
+for LEGACY_SUFFIX in $(echo "${BACKUP_LEGACY_SUFFIXES}" | tr , " "); do
+  if [ "${LEGACY_SUFFIX}" != "${BACKUP_SUFFIX}" ]; then
+    ROTATE_SUFFIXES+=("${LEGACY_SUFFIX}")
+  fi
+done
+set +f
+
 # Validate backup dir
 if [ '!' -d "${BACKUP_DIR}" -o '!' -w "${BACKUP_DIR}" -o '!' -x "${BACKUP_DIR}" ]; then
   echo "BACKUP_DIR points to a file or folder with insufficient permissions."
