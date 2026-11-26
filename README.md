@@ -245,7 +245,7 @@ To do so it is using the following independent variables:
 `POSTGRES_EXTRA_OPTS` (`-Z`) sets how `pg_dump` compresses a dump and `BACKUP_SUFFIX` names the file. Rotation removes only files with `BACKUP_SUFFIX` or one of `BACKUP_LEGACY_SUFFIXES`, so after a change of suffix the old files match nothing and stay on disk forever unless the old suffix is listed in `BACKUP_LEGACY_SUFFIXES`. To change `.sql.gz` (gzip, the default) to `.sql.zst` (zstd) without losing restore points:
 
 1. Switch the method and the suffix together and leave `BACKUP_LEGACY_SUFFIXES` empty: `POSTGRES_EXTRA_OPTS=-Z zstd:3 --large-objects` and `BACKUP_SUFFIX=.sql.zst`. New dumps are `.sql.zst`; the old `.sql.gz` files are not rotated and not removed, so both sets are on disk and the new set grows until its retention is full. Make sure the filesystem has room for it, then run `/backup.sh` once.
-2. Check the new dump: test it and restore it into an empty database (see [Restore examples](#restore-examples)).
+2. Check the new dump: test it and trailer-check it, then restore it into an empty database and compare the content with the source (see [Restore examples](#restore-examples) for what each check proves).
 3. Set `BACKUP_LEGACY_SUFFIXES=.sql.gz`. The next runs remove `.sql.gz` files by the same rules as `.sql.zst`: older than `BACKUP_KEEP_MINS` in `last`, `BACKUP_KEEP_DAYS` days in `daily`, `BACKUP_KEEP_WEEKS` × 7 + 1 days in `weekly`, `BACKUP_KEEP_MONTHS` × 31 + 1 days in `monthly`. The last `.sql.gz` is gone after the longest of them (187 days with the defaults). Do not do this before step 2: with a single copy (`BACKUP_KEEP_*` set to `0`) the first run removes the old dump as soon as it is past retention, and if the new one is unusable nothing is left.
 4. When no file with the old suffix is left (`find $BACKUP_DIR -name '*.sql.gz'` prints nothing), remove `BACKUP_LEGACY_SUFFIXES`.
 
@@ -279,9 +279,16 @@ Before restoring:
 * Keep the variables quoted, as in the commands below: an unquoted path with a space is split into several arguments, and `zstd` or the mount then fails on a wrong file while `psql` may still end with success on an empty stream.
 * The dump starts with `\restrict` and ends with `\unrestrict`, so the `psql` that applies it must support them: PostgreSQL 18.x and the patch releases 17.6, 16.10, 15.14, 13.22 and newer. An older client fails. This image ships the PostgreSQL 18 client; with the official `postgres` image pick a `$VERSION` that meets this.
 * The commands use `-v ON_ERROR_STOP=1`, so `psql` stops at the first error and exits non-zero. `-q` alone does not hide the result rows of `lo_create`, `lowrite` and `set_config`, so the commands add `-o /dev/null`; errors still go to stderr.
-* The exit code of a pipe is the one of its last command (`psql`), so a failing `zstd`/`zcat` is not reported. The pipes inside the containers run in `bash -o pipefail -c '…'`, so a failing decompressor makes the command fail. The two pipes that run in your shell (`zstd -dc … | docker exec …` below) need `set -o pipefail` in your script. A truncated or corrupted file may not make `psql` fail, so test the file first (see below) and compare the restored row counts with the source.
+* The exit code of a pipe is the one of its last command (`psql`), so a failing `zstd`/`zcat` is not reported. The pipes inside the containers run in `bash -o pipefail -c '…'`, so a failing decompressor makes the command fail. The two pipes that run in your shell (`zstd -dc … | docker exec …` below) need `set -o pipefail` in your script. A truncated or corrupted file may not make `psql` fail, so test the file first and compare the restored counts with the source (see what the checks prove below).
 
-Test a file and check that the dump is complete (`PostgreSQL database dump complete` is among the last 5 lines, the check prints `1`):
+What the checks prove (and what they do not):
+
+* `zstd -t` / `gzip -t` check the structure of the compressed stream, and the trailer check (`PostgreSQL database dump complete` among the last 5 lines, prints `1`) shows that the dump was written to the end. Together they catch a truncated or structurally broken file; neither proves that the content is correct.
+* A gzip file carries a CRC32 of the data that `gzip -t` verifies, so a flipped byte is reported. The frames written by `pg_dump -Z zstd` have **no checksum** (`zstd -lv FILE` shows `Check: None`), so damage inside the stream can pass `zstd -t`. In a test with a byte changed at 300 random positions of a 1.9 MB dump, `zstd -t` rejected 47 files and passed 253, and in 252 of the passed files the decompressed SQL differed from the original; with gzip all 100 changed files were rejected.
+* Damage to a value (for example a digit inside a string or a number) can still give valid SQL, so a restore finishes without errors and the row and large-object counts match the source. A successful restore shows that the dump can be restored, not that its content equals the source.
+* Detecting arbitrary damage needs an independent comparison of the content with the source, such as a checksum or a query result computed on both sides (for example `md5` of the rows ordered by key). Without that, keep several copies (`BACKUP_KEEP_*`) rather than relying on a single check.
+
+Test a file and check that the dump is complete:
 
 ```sh
 zstd -t "$BACKUPFILE" && zstd -dc "$BACKUPFILE" | tail -n 5 | grep -c 'PostgreSQL database dump complete'
