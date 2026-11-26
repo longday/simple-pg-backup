@@ -18,6 +18,7 @@ Inspired by [prodrigestivill/docker-postgres-backup-local](https://github.com/pr
   * [Manual Backups](#manual-backups)
   * [Automatic Periodic Backups](#automatic-periodic-backups)
 * [Restore examples](#restore-examples)
+  * [Roles the dump refers to](#roles-the-dump-refers-to)
   * [Restore using the same container](#restore-using-the-same-container)
   * [Restore using a new container](#restore-using-a-new-container)
   * [Restore a .sql.zst into a running PostgreSQL container](#restore-a-sqlzst-into-a-running-postgresql-container)
@@ -276,6 +277,7 @@ Some examples to restore/apply the backups. A dump is a plain-SQL file compresse
 Before restoring:
 
 * Restore into an **empty** database. Dumps are made without `--clean`, so objects that already exist cause errors.
+* The dump does not create roles, but it names them: restoring into a server that lacks them fails after all the data is loaded. Create them first, see [Roles the dump refers to](#roles-the-dump-refers-to).
 * Keep the variables quoted, as in the commands below: an unquoted path with a space is split into several arguments, and `zstd` or the mount then fails on a wrong file while `psql` may still end with success on an empty stream.
 * The dump starts with `\restrict` and ends with `\unrestrict`, so the `psql` that applies it must support them: PostgreSQL 18.x and the patch releases 17.6, 16.10, 15.14, 13.22 and newer. An older client fails. This image ships the PostgreSQL 18 client; with the official `postgres` image pick a `$VERSION` that meets this.
 * The commands use `-v ON_ERROR_STOP=1`, so `psql` stops at the first error and exits non-zero. `-q` alone does not hide the result rows of `lo_create`, `lowrite` and `set_config`, so the commands add `-o /dev/null`; errors still go to stderr.
@@ -296,6 +298,95 @@ gzip -t "$BACKUPFILE" && gzip -dc "$BACKUPFILE" | tail -n 5 | grep -c 'PostgreSQ
 ```
 
 The first line is for `.sql.zst`, the second for `.sql.gz`.
+
+### Roles the dump refers to
+
+The dump creates no roles: it has no `CREATE ROLE`, because roles are global objects of the server, not of the database. It does name them: in `ALTER … OWNER TO`, `GRANT`/`REVOKE`, `SET SESSION AUTHORIZATION` (the grantor inside an ACL block), `ALTER DEFAULT PRIVILEGES FOR ROLE …` and `CREATE POLICY … TO …`. Object owners are written in the main part of the file, but privileges, policies and default privileges come at the end, after the data. If a role is missing on the server, `psql -v ON_ERROR_STOP=1` stops at such a statement after all the data is loaded: on large databases that is tens of minutes wasted. A role named only in a `GRANT` or a policy cannot be guessed from the object owners. `PUBLIC` need not be created; role memberships (`GRANT role TO role`) are not in the dump.
+
+Roles are needed when you restore somewhere other than the server the dump came from: into a throwaway server to test the backup, or into a new server after a loss. The source server already has them. Create the roles before `create database` and before loading the dump, by one of the ways below, in order of preference. The variables: `$D` (host directory with the dumps), `$F` (dump file inside it), `$CTR` (container of the target server), `$SU` (its superuser), `$NET` (docker network of the servers).
+
+**Way 1: the source server is reachable.** `pg_dumpall --roles-only --no-role-passwords`, run from this image in the network of the server, prints all roles without passwords or hashes: a superset of the needed ones (plus memberships and attributes). A superuser is not required, the account of the backup service is enough. Save the output to a file and apply it without `ON_ERROR_STOP`:
+
+```sh
+SRC=postgresql                           # source server (POSTGRES_HOST)
+SRCU=backup                              # its account (POSTGRES_USER)
+
+docker run --rm --network "$NET" -e PGPASSWORD -e PGHOST="$SRC" -e PGUSER="$SRCU" \
+  longday/simple-pg-backup:1.2.0 pg_dumpall --roles-only --no-role-passwords > roles.sql
+docker exec -i "$CTR" psql -U "$SU" -q -f - < roles.sql
+```
+
+Export the password in your shell without writing it to the history. The only expected error is `role "postgres" already exists`: that role is already in the throwaway server. Running it on a replica (hot standby) was not tested: the command only reads catalogs.
+
+**Way 2: no source, only the dump file is left.** The role names are extracted from the dump itself. Save the filter as `roles.awk`; it prints `CREATE ROLE <name>;` and parses SQL identifiers character by character: the role is the last identifier of the statement (bare or in `"…"` with `"` doubled), so a name such as `"team TO archive"` is not mistaken for keywords:
+
+```awk
+function tokenize(s,   n) {
+  n = 0
+  while (s != "") {
+    if (match(s, /^[ \t]+/)) { s = substr(s, RLENGTH + 1); continue }
+    if (!match(s, /^("([^"]|"")*"|[^ \t",;()]+|[,;()])/)) break
+    tok[++n] = substr(s, 1, RLENGTH)
+    s = substr(s, RLENGTH + 1)
+  }
+  return n
+}
+function want(t) {
+  if (t ~ /^("([^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)$/ && tolower(t) != "public") seen[t] = 1
+}
+function grantee(n) {
+  if (tok[n] == "OPTION" && tok[n-1] == "GRANT" && tok[n-2] == "WITH") n -= 3
+  if (tok[n-1] == "TO" || tok[n-1] == "FROM") want(tok[n])
+}
+{
+  n = tokenize($0)
+  if (n > 0 && tok[n] == ";") n--
+  if (tok[1] == "ALTER" && tok[2] == "DEFAULT" && tok[3] == "PRIVILEGES") {
+    if (tok[4] == "FOR" && (tok[5] == "ROLE" || tok[5] == "USER")) want(tok[6])
+    grantee(n)
+  } else if (tok[1] == "ALTER") {
+    if (tok[n-1] == "TO" && tok[n-2] == "OWNER") want(tok[n])
+  } else if (tok[1] == "SET") {
+    if (tok[2] == "SESSION" && tok[3] == "AUTHORIZATION") want(tok[4])
+  } else if (tok[1] == "GRANT" || tok[1] == "REVOKE") {
+    grantee(n)
+  } else if (tok[1] == "CREATE" && tok[2] == "POLICY") {
+    for (i = 3; i <= n && tok[i] != "(" && tok[i] != "USING" && tok[i] != "WITH" && tok[i] != "TO"; i++) ;
+    if (i <= n && tok[i] == "TO") {
+      do { want(tok[++i]); i++ } while (i <= n && tok[i] == ",")
+    }
+  }
+}
+END { for (r in seen) print "CREATE ROLE " r ";" }
+```
+
+Run the filter on a host with `zstd`; `grep -a` selects only the lines with the statements of interest, `awk` parses them:
+
+```sh
+zstd -dc -- "$D/$F" | LC_ALL=C grep -a -E '^(ALTER .* OWNER TO |GRANT |REVOKE |SET SESSION AUTHORIZATION |ALTER DEFAULT PRIVILEGES |CREATE POLICY )' \
+  | LC_ALL=C awk -f roles.awk | LC_ALL=C sort -u > roles.sql
+docker exec -i "$CTR" psql -U "$SU" -q -f - < roles.sql
+```
+
+Without `zstd` or a suitable `awk` on the host, run the same filter in this image (`roles.awk` is in the current directory):
+
+```sh
+docker run --rm -v "$D":/b:ro -v "$PWD/roles.awk":/roles.awk:ro longday/simple-pg-backup:1.2.0 \
+  bash -o pipefail -c 'zstd -dc -- "/b/$1" | LC_ALL=C grep -a -E "^(ALTER .* OWNER TO |GRANT |REVOKE |SET SESSION AUTHORIZATION |ALTER DEFAULT PRIVILEGES |CREATE POLICY )" | LC_ALL=C awk -f /roles.awk | LC_ALL=C sort -u' bash "$F" > roles.sql
+docker exec -i "$CTR" psql -U "$SU" -q -f - < roles.sql
+```
+
+For `.sql.gz` replace `zstd -dc --` with `zcat`. The filter is deliberately over-inclusive: data rows that look like `GRANT … TO x` give extra roles, and an extra role is harmless, while a skipped role breaks the restore. It reads only the listed statements and only one line per statement: it does not find a role named only in a membership or in attributes, a role with no reference in the dump, or a role name containing a line break. The price is decompression of the whole file and a `grep` over it. If the restore still fails with `role "x" does not exist`, create the role `x`, drop the database and load the dump again.
+
+**Way 3: the roles are known in advance.** Fine for a repeated check, but such a list goes stale, so treat it only as an example:
+
+```sh
+for r in admin app_user readonly; do
+  docker exec "$CTR" psql -U "$SU" -qc "create role $r nologin"
+done
+```
+
+Do not work around missing roles with `-O` (`--no-owner`) or `-x` (`--no-privileges`) in `POSTGRES_EXTRA_OPTS`. `-O` alone leaves `GRANT` and policies, and the restore fails on the same roles; with `-O -x` the `GRANT`s are gone, but `CREATE POLICY … TO <role>` remains and fails on the policy role. Both flags permanently erase owners and privileges from the backup: after a restore the database belongs to the user of `psql` and the privileges must be restored by hand. They do not change dumps that already exist.
 
 ### Restore using the same container
 
